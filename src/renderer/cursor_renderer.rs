@@ -13,10 +13,21 @@ const DEFAULT_CELL_PERCENTAGE: f32 = 1.0 / 8.0;
 
 const STANDARD_CORNERS: &[(f32, f32); 4] = &[(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)];
 
+#[derive(PartialEq)]
 enum BlinkState {
     Waiting,
     On,
     Off
+}
+
+impl BlinkState {
+    fn next_state(&self) -> BlinkState {
+        match self {
+            BlinkState::Waiting => BlinkState::On,
+            BlinkState::On => BlinkState::Off,
+            BlinkState::Off => BlinkState::On
+        }
+    }
 }
 
 struct BlinkStatus {
@@ -26,7 +37,7 @@ struct BlinkStatus {
 }
 
 impl BlinkStatus {
-    pub fn new() -> BlinkStatus {
+    fn new() -> BlinkStatus {
         BlinkStatus {
             state: BlinkState::Waiting,
             last_transition: Instant::now(),
@@ -34,15 +45,14 @@ impl BlinkStatus {
         }
     }
 
-    pub fn update_status(&mut self, new_cursor: &Cursor) -> bool {
+    fn update_status(&mut self, new_cursor: &Cursor) -> bool {
         if self.previous_cursor.is_none() || new_cursor != self.previous_cursor.as_ref().unwrap() {
             self.previous_cursor = Some(new_cursor.clone());
             self.last_transition = Instant::now();
-            if new_cursor.blinkwait.is_some() && new_cursor.blinkwait != Some(0) {
-                self.state = BlinkState::Waiting;
-            } else {
-                self.state = BlinkState::On;
-            }
+            self.state = match new_cursor.blinkwait {
+                None | Some(0) => BlinkState::On,
+                _ => BlinkState::Waiting,
+            };
         } 
 
         if new_cursor.blinkwait == Some(0) || 
@@ -51,53 +61,42 @@ impl BlinkStatus {
             return true;
         }
 
-        let delay = match self.state {
+        let blink_delay = match self.state {
             BlinkState::Waiting => new_cursor.blinkwait,
             BlinkState::Off => new_cursor.blinkoff,
             BlinkState::On => new_cursor.blinkon
-        }.filter(|millis| *millis > 0).map(Duration::from_millis);
+        };
 
-        if delay.map(|delay| self.last_transition + delay < Instant::now()).unwrap_or(false) {
-            self.state = match self.state {
-                BlinkState::Waiting => BlinkState::On,
-                BlinkState::On => BlinkState::Off,
-                BlinkState::Off => BlinkState::On
-            };
-            self.last_transition = Instant::now();
-        }
+        if let Some(delay) = blink_delay {
+            let delay_duration = Duration::from_millis(delay);
+            if delay > 0 && self.last_transition.elapsed() >= delay_duration {
+                self.state = self.state.next_state();
+                self.last_transition = Instant::now();
+            }
 
-        let scheduled_frame = (match self.state {
-            BlinkState::Waiting => new_cursor.blinkwait,
-            BlinkState::Off => new_cursor.blinkoff,
-            BlinkState::On => new_cursor.blinkon
-        }).map(|delay| self.last_transition + Duration::from_millis(delay));
-
-        if let Some(scheduled_frame) = scheduled_frame {
+            let scheduled_frame = self.last_transition + delay_duration;
             REDRAW_SCHEDULER.schedule(scheduled_frame);
         }
 
-        match self.state {
-            BlinkState::Waiting | BlinkState::Off => false,
-            BlinkState::On => true
-        }
+        self.state == BlinkState::On
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Corner {
-    pub current_position: Point,
-    pub relative_position: Point,
+struct Corner {
+    current_position: Point,
+    relative_position: Point,
 }
 
 impl Corner {
-    pub fn new(relative_position: Point) -> Corner {
+    fn new(relative_position: Point) -> Corner {
         Corner {
             current_position: Point::new(0.0, 0.0),
             relative_position
         }
     }
 
-    pub fn update(&mut self, font_dimensions: Point, destination: Point) -> bool {
+    fn update(&mut self, font_dimensions: Point, destination: Point) -> bool {
         let relative_scaled_position: Point = 
             (self.relative_position.x * font_dimensions.x, self.relative_position.y * font_dimensions.y).into();
         let corner_destination = destination + relative_scaled_position;
@@ -130,9 +129,9 @@ impl Corner {
 }
 
 pub struct CursorRenderer {
-    pub corners: Vec<Corner>,
-    pub previous_position: (u64, u64),
-    pub command_line_delay: u64,
+    corners: Vec<Corner>,
+    previous_position: (u64, u64),
+    command_line_delay: u64,
     blink_status: BlinkStatus
 }
 
@@ -149,11 +148,9 @@ impl CursorRenderer {
     }
 
     fn set_cursor_shape(&mut self, cursor_shape: &CursorShape, cell_percentage: f32) {
-        self.corners = self.corners
-            .clone()
-            .into_iter().enumerate()
-            .map(|(i, corner)| {
-                let (x, y) = STANDARD_CORNERS[i];
+        self.corners = self.corners.iter().zip(STANDARD_CORNERS.iter())
+            .map(|(corner, standard_corner)| {
+                let (x, y) = *standard_corner;
                 Corner {
                     relative_position: match cursor_shape {
                         CursorShape::Block => (x, y).into(),
@@ -165,10 +162,10 @@ impl CursorRenderer {
                         // instead of the top.
                         CursorShape::Horizontal => (x, -((-y + 0.5) * cell_percentage - 0.5)).into()
                     },
-                    .. corner
+                    .. *corner
                 }
             })
-            .collect::<Vec<Corner>>();
+            .collect();
     }
 
     pub fn draw(&mut self, 
