@@ -18,7 +18,7 @@ pub use keybindings::*;
 pub use ui_commands::UiCommand;
 use handler::NeovimHandler;
 use crate::error_handling::ResultPanicExplanation;
-use crate::settings::SETTINGS;
+use crate::settings::{Settings, SETTINGS};
 use crate::INITIAL_DIMENSIONS;
 
 
@@ -35,7 +35,7 @@ fn create_nvim_command() -> Command {
     let mut cmd = Command::new("nvim");
 
     cmd.arg("--embed")
-        .args(SETTINGS.neovim_arguments.iter().skip(1))
+        .args(SETTINGS.lock().neovim_arguments.iter().skip(1))
         .stderr(Stdio::inherit());
 
     #[cfg(target_os = "windows")]
@@ -116,8 +116,12 @@ async fn start_process(mut receiver: UnboundedReceiver<UiCommand>) {
         }
     });
 
-    SETTINGS.read_initial_values(&nvim).await;
-    SETTINGS.setup_changed_listeners(&nvim).await;
+    let mut settings = Settings::new();
+
+    settings.read_initial_values(&nvim).await;
+    settings.setup_changed_listeners(&nvim).await;
+
+    SETTINGS.data = settings.data;
 
     nvim.set_option("lazyredraw", Value::Boolean(false)).await
         .ok();

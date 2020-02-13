@@ -37,7 +37,7 @@ impl RedrawScheduler {
 
     pub fn queue_next_frame(&self) {
         trace!("Next frame queued");
-        let buffer_frames = SETTINGS.get("extra_buffer_frames").read_u16();
+        let buffer_frames = SETTINGS.lock().get("extra_buffer_frames").read_u16();
         self.frames_queued.store(buffer_frames, Ordering::Relaxed);
     }
 
